@@ -2,14 +2,24 @@ from flask import Flask, request, jsonify
 import xgboost as xgb
 import pandas as pd
 import numpy as np
+import os
 
 app = Flask(__name__)
 
-# 1. Cargar el modelo
-model = xgb.XGBRegressor()
-model.load_model("modelo_guardado.json")
+# --- Ruta de inicio para verificar que la API está viva ---
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ API Clima funcionando correctamente en Heroku."
 
-# 2. Columnas usadas en el modelo
+# --- Intentar cargar el modelo ---
+try:
+    model = xgb.XGBRegressor()
+    model.load_model("modelo_guardado.json")
+except Exception as e:
+    model = None
+    print(f"❌ Error al cargar el modelo: {e}")
+
+# --- Columnas del modelo ---
 model_columns = [
     'año', 'mes', 'Abancay', 'Arequipa', 'Ayacucho', 'Cajamarca', 'Callao',
     'Cerro de Pasco', 'Chachapoyas', 'Chiclayo', 'Cusco', 'Huancavelica',
@@ -19,7 +29,7 @@ model_columns = [
     'Primavera', 'Verano'
 ]
 
-# 3. Lista de ciudades
+# --- Lista de ciudades disponibles ---
 ciudades = [
     'Abancay', 'Arequipa', 'Ayacucho', 'Cajamarca', 'Callao', 'Cerro de Pasco',
     'Chachapoyas', 'Chiclayo', 'Cusco', 'Huancavelica', 'Huancayo', 'Huaraz',
@@ -27,23 +37,36 @@ ciudades = [
     'Pucallpa', 'Puerto Maldonado', 'Puno', 'Tacna', 'Trujillo', 'Tumbes'
 ]
 
-# 4. Ruta para predicción simplificada
+# --- Estación automática según mes ---
+def obtener_estacion(mes):
+    if mes in [12, 1, 2]:
+        return "Verano"
+    elif mes in [3, 4, 5]:
+        return "Otoño"
+    elif mes in [6, 7, 8]:
+        return "Invierno"
+    elif mes in [9, 10, 11]:
+        return "Primavera"
+    return None
+
+# --- Ruta de predicción ---
 @app.route("/predecir", methods=["POST"])
 def predecir():
+    if model is None:
+        return jsonify({"error": "Modelo no cargado correctamente."}), 500
     try:
         data = request.get_json()
-
         anio = int(data.get("año"))
         mes = int(data.get("mes"))
-        estacion = data.get("estacion")
         ciudad = data.get("ciudad")
 
-        if estacion not in ["Invierno", "Verano", "Primavera", "Otoño"]:
-            return jsonify({"error": "Estación no válida"}), 400
         if ciudad not in ciudades:
             return jsonify({"error": "Ciudad no válida"}), 400
+        if mes < 1 or mes > 12:
+            return jsonify({"error": "Mes fuera de rango (1-12)"}), 400
 
-        # 5. Crear input_data igual que el script original
+        estacion = obtener_estacion(mes)
+
         input_data = {
             'año': [anio],
             'mes': [mes],
@@ -58,10 +81,7 @@ def predecir():
         for c in ciudades:
             input_data[c] = [1 if c == ciudad else 0]
 
-        # 6. Convertir a DataFrame y reordenar
         input_df = pd.DataFrame(input_data)[model_columns]
-
-        # 7. Predecir
         pred = model.predict(input_df)[0]
         temp = float(round(pred, 2))
 
@@ -69,11 +89,13 @@ def predecir():
             "año": anio,
             "mes": mes,
             "ciudad": ciudad,
+            "estacion_detectada": estacion,
             "temperatura_maxima_predicha": temp
         })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# --- Para desarrollo local, ignorado por gunicorn ---
 if __name__ == "__main__":
     app.run(debug=True)
